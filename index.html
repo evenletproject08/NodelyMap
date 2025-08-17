@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="NodelyMap - Frontend-only mind map tool with drag-drop, connect nodes, export PNG/PDF, localStorage, and minimalist design.">
+<title>NodelyMap - Mind Map Generator</title>
+<script src="https://cdn.jsdelivr.net/npm/interactjs/dist/interact.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI',sans-serif;}
+body{background:#f7f7f7;color:#333;display:flex;flex-direction:column;align-items:center;}
+header{width:100%;text-align:center;padding:20px 0;background:#fff;box-shadow:0 2px 5px rgba(0,0,0,0.1);position:relative;}
+header h1{font-size:2rem;color:#222;}
+header p{margin-top:5px;color:#555;}
+header a{position:absolute; top:20px; right:20px; background:#00acc1; color:#fff; padding:8px 12px; border-radius:5px; text-decoration:none; font-weight:bold; transition:0.3s;}
+header a:hover{background:#007c91;}
+.controls{display:flex;justify-content:center;gap:10px;margin:20px 0;flex-wrap:wrap;}
+.controls button{padding:10px 15px;border:none;border-radius:5px;cursor:pointer;background:#00acc1;color:#fff;font-weight:bold;transition:0.3s;}
+.controls button:hover{background:#007c91;}
+#mindmap-container{width:90%;height:500px;background:#fff;border:2px dashed #ccc;position:relative;overflow:auto;border-radius:10px;}
+.node{position:absolute;padding:10px 15px;border-radius:8px;background:#e0f7fa;cursor:move;min-width:80px;text-align:center;box-shadow:0 2px 5px rgba(0,0,0,0.1);user-select:none;transition:0.2s;}
+.node.selected{box-shadow:0 0 10px 3px #00acc1;}
+.node input[type=text]{border:none;background:transparent;width:100%;text-align:center;font-size:1rem;}
+.node .controls{margin-top:5px;display:flex;justify-content:center;gap:5px;}
+.node .controls input[type=color]{width:25px;height:25px;}
+.node .controls button{padding:2px 5px;}
+.toggle-children{cursor:pointer;font-weight:bold;margin-left:5px;}
+svg{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
+section{width:90%;max-width:900px;background:#fff;padding:20px;border-radius:10px;margin-bottom:40px;box-shadow:0 2px 5px rgba(0,0,0,0.1);}
+section h2{font-size:1.5rem;margin-bottom:10px;color:#222;}
+section p, section ol{margin-bottom:10px;line-height:1.5;color:#555;}
+@media(max-width:600px){#mindmap-container{height:400px;}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NodelyMap</h1>
+  <p>Enhanced Mind Map Generator – Drag, Drop, Connect, Export Instantly</p>
+  <a href="#how-to-use">How to Use</a>
+</header>
+
+<div class="controls">
+  <button id="add-node">Add Node</button>
+  <button id="connect-nodes">Connect Nodes</button>
+  <button id="export-png">Export PNG</button>
+  <button id="export-pdf">Export PDF</button>
+</div>
+
+<div id="mindmap-container">
+  <svg id="connections"></svg>
+</div>
+
+<section id="how-to-use">
+<h2>How to Use NodelyMap</h2>
+<ol>
+<li>Select a parent node if you want the new node attached automatically.</li>
+<li>Click "Add Node" to create a new node. Free-floating if no parent selected.</li>
+<li>Drag nodes to arrange freely.</li>
+<li>Edit text, add emojis/icons, change color.</li>
+<li>Delete a node with ✕.</li>
+<li>Connect nodes manually using "Connect Nodes".</li>
+<li>Collapse/expand children with ▼.</li>
+<li>Export PNG or PDF to save.</li>
+<li>Your mind map is saved in the browser automatically.</li>
+</ol>
+</section>
+
+<section id="about">
+<h2>About NodelyMap</h2>
+<p>NodelyMap is a free, frontend-only mind map generator for students, professionals, and creators. Organize and visualize your ideas with drag-and-drop nodes, multi-parent connections, icons/emojis, and customizable colors.</p>
+<p>Export instantly as PNG or PDF. No signups, fully offline-friendly. Ideal for brainstorming, project planning, or studying. NodelyMap makes idea organization simple, fast, and visually appealing.</p>
+</section>
+
+<script>
+const container = document.getElementById('mindmap-container');
+const svg = document.getElementById('connections');
+let nodes = JSON.parse(localStorage.getItem('nodelyNodes')) || [];
+let connections = JSON.parse(localStorage.getItem('nodelyConnections')) || [];
+let nodeIdCounter = nodes.length ? Math.max(...nodes.map(n=>parseInt(n.id)))+1 : 0;
+let connectMode=false, connectFrom=null;
+let selectedNodeId=null;
+
+// Create a node
+function createNode({id, x=50, y=50, text='New Node', color='#e0f7fa', parent=null}){
+  const node = document.createElement('div');
+  node.classList.add('node');
+  node.style.left = x+'px';
+  node.style.top = y+'px';
+  node.style.background = color;
+  node.dataset.id = id;
+  node.dataset.collapsed = 'false';
+  node.innerHTML = `
+    <input type="text" value="${text}" />
+    <span class="toggle-children">▼</span>
+    <div class="controls">
+      <button class="delete">✕</button>
+      <input type="color" value="${color}">
+    </div>
+  `;
+  container.appendChild(node);
+
+  // Drag
+  interact(node).draggable({
+    onmove: event => {
+      const t = event.target;
+      t.style.left = parseFloat(t.style.left)+event.dx+'px';
+      t.style.top = parseFloat(t.style.top)+event.dy+'px';
+      drawConnections(); saveNodes();
+    }
+  });
+
+  // Delete
+  node.querySelector('.delete').onclick = () => {
+    container.removeChild(node);
+    nodes = nodes.filter(n=>n.id!==id);
+    connections = connections.filter(c=>c.from!==id && c.to!==id);
+    drawConnections(); saveNodes(); saveConnections();
+  };
+
+  // Color change
+  node.querySelector('input[type=color]').oninput = e => {
+    node.style.background = e.target.value;
+    saveNodes();
+  };
+
+  // Text change
+  node.querySelector('input[type=text]').oninput = saveNodes;
+
+  // Collapse children
+  node.querySelector('.toggle-children').onclick = e => {
+    const collapsed = node.dataset.collapsed==='true';
+    node.dataset.collapsed = (!collapsed).toString();
+    toggleChildren(id,!collapsed);
+    e.stopPropagation();
+  };
+
+  node.onclick = e => {
+    if(connectMode){
+      if(!connectFrom) connectFrom = id;
+      else{
+        if(connectFrom!==id){
+          connections.push({from:connectFrom,to:id});
+          saveConnections(); drawConnections();
+          connectFrom=null; connectMode=false;
+        }
+      }
+      e.stopPropagation(); return;
+    }
+    document.querySelectorAll('.node').forEach(n=>n.classList.remove('selected'));
+    node.classList.add('selected');
+    selectedNodeId = id;
+  }
+
+  if(parent!==null){
+    connections.push({from:parent,to:id});
+    saveConnections();
+  }
+
+  return node;
+}
+
+// Toggle children
+function toggleChildren(parentId, show){
+  const children = connections.filter(c=>c.from==parentId).map(c=>document.querySelector(`.node[data-id='${c.to}']`)).filter(n=>n);
+  children.forEach(c=>{
+    c.style.display = show?'block':'none';
+    if(c.dataset.collapsed==='true') toggleChildren(c.dataset.id,false);
+  });
+  drawConnections();
+}
+
+// Save/load
+function saveNodes(){
+  nodes = Array.from(container.querySelectorAll('.node')).map(n=>({
+    id:n.dataset.id,
+    x:parseFloat(n.style.left),
+    y:parseFloat(n.style.top),
+    text:n.querySelector('input[type=text]').value,
+    color:n.querySelector('input[type=color]').value
+  }));
+  localStorage.setItem('nodelyNodes',JSON.stringify(nodes));
+}
+
+function saveConnections(){
+  localStorage.setItem('nodelyConnections',JSON.stringify(connections));
+}
+
+// Draw lines
+function drawConnections(){
+  svg.innerHTML='';
+  connections.forEach(c=>{
+    const from = document.querySelector(`.node[data-id='${c.from}']`);
+    const to = document.querySelector(`.node[data-id='${c.to}']`);
+    if(!from || !to || from.style.display==='none' || to.style.display==='none') return;
+    const line = document.createElementNS("http://www.w3.org/2000/svg",'line');
+    const fRect = from.getBoundingClientRect();
+    const tRect = to.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    line.setAttribute('x1', fRect.left+fRect.width/2 - containerRect.left);
+    line.setAttribute('y1', fRect.top+fRect.height/2 - containerRect.top);
+    line.setAttribute('x2', tRect.left+tRect.width/2 - containerRect.left);
+    line.setAttribute('y2', tRect.top+tRect.height/2 - containerRect.top);
+    line.setAttribute('stroke','#888');
+    line.setAttribute('stroke-width','2');
+    svg.appendChild(line);
+  });
+}
+
+// Buttons
+document.getElementById('add-node').onclick = () => {
+  const parent = selectedNodeId !== null ? selectedNodeId : null;
+  const newNode = createNode({id:nodeIdCounter++, parent});
+  if(parent===null){
+    newNode.style.left='50px'; newNode.style.top='50px';
+  } else {
+    const parentNode = document.querySelector(`.node[data-id='${parent}']`);
+    newNode.style.left = parseFloat(parentNode.style.left)+120+'px';
+    newNode.style.top = parseFloat(parentNode.style.top)+'px';
+  }
+  nodes.push({
+    id:newNode.dataset.id,
+    x:parseFloat(newNode.style.left),
+    y:parseFloat(newNode.style.top),
+    text:newNode.querySelector('input[type=text]').value,
+    color:newNode.querySelector('input[type=color]').value
+  });
+  saveNodes(); drawConnections();
+};
+
+document.getElementById('connect-nodes').onclick = ()=>{ connectMode=true; connectFrom=null; }
+
+// Export PNG
+document.getElementById('export-png').onclick = () => {
+  html2canvas(container).then(canvas => {
+    const link = document.createElement('a');
+    link.download = 'nodelymap.png';
+    link.href = canvas.toDataURL();
+    link.click();
+  });
+};
+
+// Export PDF
+document.getElementById('export-pdf').onclick = () => {
+  html2canvas(container).then(canvas => {
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jspdf.jsPDF('landscape', 'pt', [canvas.width, canvas.height]);
+    pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+    pdf.save('nodelymap.pdf');
+  });
+};
+
+// Load saved nodes
+nodes.forEach(n=>createNode(n));
+drawConnections();
+</script>
+
+</body>
+</html>
